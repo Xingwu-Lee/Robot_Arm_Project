@@ -1,0 +1,8 @@
+prefix=/home/ubuntu/armpi_fpv/install
+
+Name: armpi_fpv
+Description: Description of armpi_fpv
+Version: 1.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 
