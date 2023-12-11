@@ -11,6 +11,35 @@ import HiwonderSDK.PID as PID
 import HiwonderSDK.Misc as Misc
 from ArmIK.Transform import *
 from ArmIK.ArmMoveIK import *
+import face_recognition
+import os
+import glob
+
+def load_face_encodings(name):
+    """
+    Load face encodings for the given name from a specific folder structure.
+    """
+    known_face_encodings = []
+    folder_path = os.path.join("output_faces", name)  # "faces" is the main folder containing subfolders for each individual
+
+    # Load all images from the subfolder
+    for image_path in glob.glob(os.path.join(folder_path, "*.jpg")):
+        image = face_recognition.load_image_file(image_path)
+        face_encoding = face_recognition.face_encodings(image)[0]
+        known_face_encodings.append(face_encoding)
+
+    return known_face_encodings
+
+
+# Ask for the name
+name_to_track = input("Enter the name of the person to track: ")
+
+# Load encodings for the given name
+known_face_encodings = load_face_encodings(name_to_track)
+
+
+
+
 
 # 人脸检测
 if sys.version_info.major == 2:
@@ -28,11 +57,71 @@ y_pid = PID.PID(P=0.00001, I=0, D=0)
 z_pid = PID.PID(P=0.005, I=0, D=0)
     
 # 初始位置
-def initMove():
-    Board.setBusServoPulse(1, 500, 800)
-    Board.setBusServoPulse(2, 500, 800)
-    AK.setPitchRangeMoving((0, y_dis, z_dis), 0,-90, 0, 1500)
+def run(img):
+    global x_dis, y_dis, z_dis, st
 
+    # Convert the image from BGR color to RGB color
+    rgb_frame = img[:, :, ::-1]
+
+    # Find all the faces and face encodings in the current frame of video
+    face_locations = face_recognition.face_locations(rgb_frame)
+    face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+
+    for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+        # See if the face is a match for the known face(s)
+        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+
+        if True in matches:
+            # Save the image if it's the person we want
+            face_image = img[top:bottom, left:right]
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            cv2.imwrite(f"tracked_faces/{name_to_track}_{timestamp}.jpg", face_image)
+
+            # Draw a box around the face
+            cv2.rectangle(img, (left, top), (right, bottom), (0, 0, 255), 2)
+            cv2.putText(img, name_to_track, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 1)
+
+            # Face tracking logic
+            X = (left + right) / 2
+            Y = (top + bottom) / 2
+
+            x_pid.SetPoint = img.shape[1] / 2.0  # Desired X position (center)
+            x_pid.update(X)  # Current X position
+            dx = x_pid.output
+            x_dis += int(dx)  # Update X displacement
+
+            x_dis = max(0, min(x_dis, 1000))  # Constrain X displacement
+
+            if abs(Y - img.shape[0] / 2.0) < 20:
+                z_pid.SetPoint = Y
+            else:
+                z_pid.SetPoint = img.shape[0] / 2.0  # Desired Y position (center)
+
+            z_pid.update(Y)
+            dy = z_pid.output
+            z_dis += dy  # Update Z displacement
+
+            z_dis = max(10.00, min(z_dis, 40.00))  # Constrain Z displacement
+
+            target = AK.setPitchRange((0, round(y_dis, 2), round(z_dis, 2)), -5, 10)
+
+            if target:
+                servo_data = target[0]
+                if st:
+                    Board.setBusServoPulse(3, servo_data['servo3'], 1000)
+                    Board.setBusServoPulse(4, servo_data['servo4'], 1000)
+                    Board.setBusServoPulse(5, servo_data['servo5'], 1000)
+                    time.sleep(1)
+                    st = False
+                else:
+                    Board.setBusServoPulse(3, servo_data['servo3'], 20)
+                    Board.setBusServoPulse(4, servo_data['servo4'], 20)
+                    Board.setBusServoPulse(5, servo_data['servo5'], 20)
+
+            Board.setBusServoPulse(6, int(x_dis), 20)
+            time.sleep(0.03)
+
+    return img
 # 阈值
 conf_threshold = 0.6
 # 模型位置
